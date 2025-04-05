@@ -1,0 +1,73 @@
+---
+- name: Initialize HashiCorp Vault
+  hosts: vault
+  become: no
+  vars:
+    vault_addr: "http://127.0.0.1:8200"
+    vault_init_output_file: "/tmp/vault_init.json"
+
+    local_credentials_dir: "{{ playbook_dir }}/../../credentials"
+  
+  tasks:
+    - name: Create local credentials directory
+      delegate_to: localhost
+      file:
+        path: "{{ local_credentials_dir }}"
+        state: directory
+        mode: 0700
+      run_once: true
+
+    - name: Check Vault initialization status
+      shell: VAULT_ADDR={{ vault_addr }} vault status -format=json
+      register: vault_status
+      failed_when: false
+      changed_when: false
+    
+    - name: Parse Vault status
+      set_fact:
+        vault_initialized: "{{ (vault_status.stdout | from_json).initialized }}"
+      when: vault_status.rc == 0
+
+    - name: Initialize Vault
+      shell: VAULT_ADDR={{ vault_addr }} vault operator init -format=json > {{ vault_init_output_file }}
+      register: vault_init
+      when: not vault_initialized is defined or not vault_initialized
+    
+    - name: Get initialization output
+      slurp:
+        src: "{{ vault_init_output_file }}"
+      register: encoded_init
+      when: not vault_initialized is defined or not vault_initialized
+    
+    - name: Decode initialization output
+      set_fact:
+        vault_init_data: "{{ encoded_init['content'] | b64decode | from_json }}"
+      when: encoded_init is defined and encoded_init.content is defined
+
+    - name: Save Vault keys locally
+      delegate_to: localhost
+      copy:
+        content: "{{ vault_init_data | to_nice_json }}"
+        dest: "{{ local_credentials_dir }}/vault_keys.json"
+        mode: 0600
+      when: vault_init_data is defined
+    
+    - name: Remove temporary initialization file from remote server
+      file:
+        path: "{{ vault_init_output_file }}"
+        state: absent
+      when: not vault_initialized is defined or not vault_initialized
+    
+    - name: Show initialization status
+      debug:
+        msg: "Vault was already initialized"
+      when: vault_initialized is defined and vault_initialized
+    
+    - name: Show initialization instructions
+      debug:
+        msg: 
+          - "Vault has been initialized!"
+          - "Keys have been saved to {{ local_credentials_dir }}/vault_keys.json"
+          - "IMPORTANT: Keep these keys secure! They are required to unseal Vault."
+          - "Next step: Run playbook 03_vault_unseal.yml to unseal Vault."
+      when: vault_init_data is defined

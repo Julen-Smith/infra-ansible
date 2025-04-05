@@ -1,0 +1,78 @@
+.env
+# Archivos de credenciales y claves
+/credentials/
+*.key
+*.pem
+*.crt
+*.cer
+*.p12
+*.pfx
+*.json
+*_token*
+*_keys*
+*vault_*
+
+# Variables de entorno y configuración local
+.env
+.env.*
+*.local
+local_*
+
+# Archivos temporales
+*.tmp
+*.temp
+.tmp/
+.temp/
+/tmp/
+
+# Archivos de caché
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.cache/
+.pytest_cache/
+
+# Entornos virtuales
+venv/
+ENV/
+env/
+ansible-env/
+.venv/
+.python-version
+
+# Archivos de log
+*.log
+logs/
+log/
+
+# Archivos específicos de sistemas operativos
+.DS_Store
+Thumbs.db
+desktop.ini
+.directory
+
+# Archivos de editores
+.idea/
+.vscode/
+*.swp
+*.swo
+*.sublime-*
+.project
+.settings/
+*.bak
+*.orig
+
+# Archivos de Ansible
+*.retry
+ansible-vault-password.txt
+vault-password.txt
+.vault_pass
+
+# Directorios generados
+/dist/
+/build/
+/.tox/
+
+# Archivos de respaldo
+*~

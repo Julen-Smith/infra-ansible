@@ -1,0 +1,86 @@
+---
+- name: Unseal HashiCorp Vault
+  hosts: vault
+  become: no
+  vars:
+    vault_addr: "http://127.0.0.1:8200"
+    local_credentials_dir: "{{ playbook_dir }}/../../credentials"
+  
+  tasks:
+    - name: Load Vault keys
+      delegate_to: localhost
+      slurp:
+        src: "{{ local_credentials_dir }}/vault_keys.json"
+      register: encoded_keys
+      ignore_errors: yes
+    
+    - name: Check if keys exist
+      fail:
+        msg: "No Vault keys found. Please run 02_vault_initialize.yml first."
+      when: encoded_keys is failed
+    
+    - name: Parse Vault keys
+      set_fact:
+        vault_keys: "{{ encoded_keys['content'] | b64decode | from_json }}"
+      when: encoded_keys is not failed
+    
+    - name: Check Vault status
+      shell: VAULT_ADDR={{ vault_addr }} vault status || true
+      register: vault_status_output
+      changed_when: false
+    
+    - name: Debug Vault status
+      debug:
+        var: vault_status_output.stdout_lines
+    
+    - name: Determine if Vault is sealed
+      set_fact:
+        vault_is_sealed: "{{ vault_status_output.stdout is search('Sealed\\s+true') }}"
+    
+    - name: Debug vault seal state
+      debug:
+        msg: "Vault is sealed: {{ vault_is_sealed }}"
+    
+    - name: Unseal Vault with key 1
+      shell: VAULT_ADDR={{ vault_addr }} vault operator unseal {{ vault_keys.unseal_keys_hex[0] }}
+      when: vault_is_sealed
+    
+    - name: Unseal Vault with key 2
+      shell: VAULT_ADDR={{ vault_addr }} vault operator unseal {{ vault_keys.unseal_keys_hex[1] }}
+      when: vault_is_sealed
+    
+    - name: Unseal Vault with key 3
+      shell: VAULT_ADDR={{ vault_addr }} vault operator unseal {{ vault_keys.unseal_keys_hex[2] }}
+      when: vault_is_sealed
+    
+    - name: Wait a moment for Vault to become available
+      pause:
+        seconds: 3
+      when: vault_is_sealed
+    
+    - name: Check final Vault status
+      shell: VAULT_ADDR={{ vault_addr }} vault status
+      register: final_status
+      changed_when: false
+      failed_when: false
+    
+    - name: Show Vault status
+      debug:
+        var: final_status.stdout_lines
+    
+    - name: Check if Vault is now unsealed
+      set_fact:
+        vault_unsealed: "{{ final_status.stdout is search('Sealed\\s+false') }}"
+    
+    - name: Confirm if Vault was unsealed successfully
+      debug:
+        msg: 
+          - "Vault has been successfully unsealed!"
+          - "You can now access the Vault UI at: http://{{ hostvars[inventory_hostname]['ansible_host'] }}:8200"
+          - "To configure Vault, run the next playbook: 04_vault_configure.yml"
+      when: vault_unsealed
+    
+    - name: Show error if Vault is still sealed
+      fail:
+        msg: "Failed to unseal Vault. Please check the Vault status and try again."
+      when: not vault_unsealed

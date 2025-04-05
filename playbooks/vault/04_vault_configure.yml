@@ -1,0 +1,189 @@
+---
+- name: Configure HashiCorp Vault
+  hosts: vault
+  become: no
+  vars:
+    vault_addr: "http://127.0.0.1:8200"
+    local_credentials_dir: "{{ playbook_dir }}/../../credentials"
+    enable_kv: true
+    kv_path: "kv"
+    kv_version: 2
+
+    demo_secrets:
+      - path: "kv/demo/database"
+        data:
+          username: "db_admin"
+          password: "demo_password_123"
+      - path: "kv/demo/api"
+        data:
+          api_key: "demo_api_key_456"
+  
+  tasks:
+    - name: Verify Vault is unsealed
+      shell: VAULT_ADDR={{ vault_addr }} vault status || true
+      register: vault_status_output
+      changed_when: false
+    
+    - name: Debug Vault status
+      debug:
+        var: vault_status_output.stdout_lines
+    
+    - name: Check if Vault is unsealed
+      set_fact:
+        vault_is_unsealed: "{{ vault_status_output.stdout is search('Sealed\\s+false') }}"
+    
+    - name: Fail if Vault is not unsealed
+      fail:
+        msg: "Vault is still sealed. Please run the 03_vault_unseal.yml playbook first."
+      when: not vault_is_unsealed
+    
+    - name: Load Vault keys
+      delegate_to: localhost
+      slurp:
+        src: "{{ local_credentials_dir }}/vault_keys.json"
+      register: encoded_keys
+      ignore_errors: yes
+    
+    - name: Check if keys exist
+      fail:
+        msg: "No Vault keys found. Please run 02_vault_initialize.yml first."
+      when: encoded_keys is failed
+    
+    - name: Parse Vault keys
+      set_fact:
+        vault_keys: "{{ encoded_keys['content'] | b64decode | from_json }}"
+      when: encoded_keys is not failed
+    
+    - name: Set root token
+      set_fact:
+        root_token: "{{ vault_keys.root_token }}"
+      when: vault_keys is defined
+    
+    - name: Debug root token
+      debug:
+        msg: "Root token is available"
+      
+    - name: Create policy file directory
+      file:
+        path: "/tmp/vault_policies"
+        state: directory
+        mode: 0700
+    
+    - name: Create read-only policy
+      copy:
+        dest: "/tmp/vault_policies/readonly.hcl"
+        content: |
+          path "kv/data/demo/*" {
+            capabilities = ["read"]
+          }
+        mode: 0600
+    
+    - name: Create admin policy
+      copy:
+        dest: "/tmp/vault_policies/admin.hcl"
+        content: |
+          path "kv/*" {
+            capabilities = ["create", "read", "update", "delete", "list"]
+          }
+          
+          path "sys/auth/*" {
+            capabilities = ["create", "read", "update", "delete", "sudo"]
+          }
+
+          path "sys/policies/*" {
+            capabilities = ["create", "read", "update", "delete", "list"]
+          }
+          
+          path "auth/*" {
+            capabilities = ["create", "read", "update", "delete", "list", "sudo"]
+          }
+        mode: 0600
+    
+    - name: Enable KV secrets engine
+      shell: |
+        VAULT_ADDR={{ vault_addr }} VAULT_TOKEN={{ root_token }} \
+        vault secrets enable -version={{ kv_version }} -path={{ kv_path }} kv || \
+        echo "KV secrets engine already enabled"
+      register: kv_enable
+      changed_when: "'Success' in kv_enable.stdout"
+      failed_when: false
+      when: enable_kv
+    
+    - name: Write admin policy
+      shell: |
+        VAULT_ADDR={{ vault_addr }} VAULT_TOKEN={{ root_token }} \
+        vault policy write admin /tmp/vault_policies/admin.hcl
+      register: admin_policy
+      changed_when: "'Success' in admin_policy.stdout"
+      failed_when: false
+    
+    - name: Write read-only policy
+      shell: |
+        VAULT_ADDR={{ vault_addr }} VAULT_TOKEN={{ root_token }} \
+        vault policy write readonly /tmp/vault_policies/readonly.hcl
+      register: readonly_policy
+      changed_when: "'Success' in readonly_policy.stdout"
+      failed_when: false
+    
+    - name: Create demo secrets
+      shell: |
+        VAULT_ADDR={{ vault_addr }} VAULT_TOKEN={{ root_token }} \
+        vault kv put {{ item.path }} {{ item.data | dict2items | map('join', '=') | join(' ') }}
+      loop: "{{ demo_secrets }}"
+      register: create_secrets
+      changed_when: "'Success' in create_secrets.stdout"
+      failed_when: false
+    
+    - name: Create a read-only token
+      shell: |
+        VAULT_ADDR={{ vault_addr }} VAULT_TOKEN={{ root_token }} \
+        vault token create -policy=readonly -format=json
+      register: readonly_token
+      changed_when: readonly_token.rc == 0
+      failed_when: false
+    
+    - name: Parse read-only token
+      set_fact:
+        parsed_readonly_token: "{{ readonly_token.stdout | from_json }}"
+      when: readonly_token is defined and readonly_token.stdout is defined
+    
+    - name: Save read-only token
+      delegate_to: localhost
+      copy:
+        content: "{{ parsed_readonly_token | to_nice_json }}"
+        dest: "{{ local_credentials_dir }}/readonly_token.json"
+        mode: 0600
+      when: parsed_readonly_token is defined
+    
+    - name: Clean up policy files
+      file:
+        path: "/tmp/vault_policies"
+        state: absent
+    
+    - name: List enabled secrets engines
+      shell: |
+        VAULT_ADDR={{ vault_addr }} VAULT_TOKEN={{ root_token }} \
+        vault secrets list
+      register: secrets_list
+      changed_when: false
+      failed_when: false
+    
+    - name: Show enabled secrets engines
+      debug:
+        var: secrets_list.stdout_lines
+      when: secrets_list.stdout is defined
+    
+    - name: Show configuration summary
+      debug:
+        msg:
+          - "Vault has been configured with the following:"
+          - "- KV secrets engine enabled at path: {{ kv_path }}"
+          - "- Admin policy created"
+          - "- Read-only policy created"
+          - "- Demo secrets created in kv/demo/*"
+          - "- Read-only token created and saved to {{ local_credentials_dir }}/readonly_token.json"
+          - ""
+          - "You can access the Vault UI at: http://{{ hostvars[inventory_hostname]['ansible_host'] }}:8200"
+          - "Use the root token from {{ local_credentials_dir }}/vault_keys.json to log in."
+          - ""
+          - "INSTALLATION COMPLETE! Your Vault server is now ready to use."

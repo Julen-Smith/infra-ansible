@@ -1,0 +1,76 @@
+---
+- name: Complete HashiCorp Vault Setup
+  hosts: localhost
+  gather_facts: no
+  
+  tasks:
+    - name: Create credentials directory
+      file:
+        path: "{{ playbook_dir }}/../../credentials"
+        state: directory
+        mode: 0700
+    
+    - name: Run Vault installation playbook
+      command: ansible-playbook -i inventory/hosts.ini playbooks/vault/01_vault_install.yml
+      args:
+        chdir: "{{ playbook_dir }}/../.."
+      register: install_result
+      failed_when: install_result.rc != 0
+    
+    - name: Wait for Vault to start
+      pause:
+        seconds: 10
+        prompt: "Waiting for Vault to start..."
+    
+    - name: Run Vault initialization playbook
+      command: ansible-playbook -i inventory/hosts.ini playbooks/vault/02_vault_initialize.yml
+      args:
+        chdir: "{{ playbook_dir }}/../.."
+      register: init_result
+      failed_when: init_result.rc != 0
+    
+    - name: Run Vault unseal playbook
+      command: ansible-playbook -i inventory/hosts.ini playbooks/vault/03_vault_unseal.yml
+      args:
+        chdir: "{{ playbook_dir }}/../.."
+      register: unseal_result
+      failed_when: unseal_result.rc != 0
+    
+    - name: Run Vault configuration playbook
+      command: ansible-playbook -i inventory/hosts.ini playbooks/vault/04_vault_configure.yml
+      args:
+        chdir: "{{ playbook_dir }}/../.."
+      register: config_result
+      failed_when: config_result.rc != 0
+    
+    - name: Show completion message
+      debug:
+        msg:
+          - "==============================================================="
+          - "             VAULT INSTALLATION COMPLETE"
+          - "==============================================================="
+          - ""
+          - "Vault is now installed, initialized, unsealed, and configured!"
+          - ""
+          - "Access the Web UI: http://{{ lookup('file', playbook_dir + '/../../credentials/server_ip.txt', errors='ignore') | default(groups['vault'][0], true) }}:8200"
+          - ""
+          - "IMPORTANT: Credentials have been saved to ./credentials/"
+          - "           Keep these files secure!"
+          - ""
+          - "To use Vault CLI:"
+          - "export VAULT_ADDR=http://SERVER_IP:8200"
+          - "export VAULT_TOKEN=<root_token_from_credentials_file>"
+          - ""
+          - "==============================================================="
+    
+    - name: Show troubleshooting steps if any playbook failed
+      debug:
+        msg:
+          - "One or more playbooks encountered errors during execution."
+          - "Please check the individual playbook output for details."
+          - "Try running each playbook separately to troubleshoot:"
+          - "1. ansible-playbook -i inventory/hosts.ini playbooks/vault/01_vault_install.yml"
+          - "2. ansible-playbook -i inventory/hosts.ini playbooks/vault/02_vault_initialize.yml"
+          - "3. ansible-playbook -i inventory/hosts.ini playbooks/vault/03_vault_unseal.yml"
+          - "4. ansible-playbook -i inventory/hosts.ini playbooks/vault/04_vault_configure.yml"
+      when: install_result.rc != 0 or init_result.rc != 0 or unseal_result.rc != 0 or config_result.rc != 0
